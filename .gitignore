@@ -1,0 +1,18 @@
+# Dependencies
+node_modules/
+package-lock.json
+# bun.lock
+.wrangler/
+.dev.vars
+dev_server.log
+wrangler*.log
+.DS_Store
+
+# Build output
+dist/
+
+# User Configuration
+wrangler.jsonc
+
+.agent
+.env
