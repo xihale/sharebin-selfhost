@@ -6,9 +6,14 @@
 import { icon } from '../icons.js'
 import { showToast } from '../ui/toast.js'
 import { showView, updateHeaderMeta } from '../ui/view-router.js'
-import { createCodeEditor } from '../highlight/codemirror.js'
-import { normalizeLanguageId, renderStaticHighlightedCode, getAvailableLanguageIds } from '../highlight/shiki.js'
-import { validateLanguage, detectLanguage, loadFlourite, getLanguageMap, validLanguages } from './language-detect.js'
+import {
+  createCodeEditor,
+  getAvailableLanguageIds,
+  normalizeLanguageId,
+  isLanguageSupported,
+} from '../highlight/codemirror.js'
+import { renderStaticHighlightedCode } from '../highlight/shiki.js'
+import { validateLanguage, detectLanguage, loadFlourite } from './language-detect.js'
 import { exportCodeToImage } from '../export/image.js'
 import { API } from '../config.js'
 import { setVisible, setState } from '../dom.js'
@@ -20,7 +25,14 @@ let _detectTimer: ReturnType<typeof setTimeout> | null = null
 let _saveBtn: HTMLButtonElement | null = null
 
 function getPreviewLanguage(langInput: HTMLInputElement | null): string {
+  // CodeMirror ids; Shiki maps common aliases (shell→bash, dockerfile→docker, …)
   return normalizeLanguageId(langInput?.value || 'plaintext')
+}
+
+/** Apply a language to the live CodeMirror editor (loads grammar if needed). */
+async function applyEditorLanguage(lang: string): Promise<void> {
+  const id = normalizeLanguageId(lang)
+  await _editor?.setLanguage(id)
 }
 
 // ==================== Initialization ====================
@@ -91,7 +103,7 @@ export async function initEditor(_config: AppConfig): Promise<void> {
           const detected = await detectLanguage(content)
           if (detected) {
             langInput.value = detected
-            await _editor?.setLanguage(detected)
+            await applyEditorLanguage(detected)
             updatePreviewBtnVisibility()
           }
         } catch (e) {
@@ -165,12 +177,12 @@ export async function initEditor(_config: AppConfig): Promise<void> {
     }
 
     function selectLanguage(lang: string) {
-      languageInput.value = lang
+      const normalized = normalizeLanguageId(lang)
+      languageInput.value = normalized
       _isManualSelection = true
       hideDropdown()
       updatePreviewBtnVisibility()
-      const langMap = getLanguageMap()
-      _editor?.setLanguage(langMap[lang] || lang)
+      void applyEditorLanguage(normalized)
     }
 
     languageInput.addEventListener('focus', () => {
@@ -190,12 +202,13 @@ export async function initEditor(_config: AppConfig): Promise<void> {
 
       if (debounceTimer) clearTimeout(debounceTimer)
       debounceTimer = setTimeout(async () => {
-        const inputVal = val.toLowerCase()
-        const langMap = getLanguageMap ? getLanguageMap() : {} as Record<string, string>
-        if (validLanguages.has(inputVal)) {
-          await _editor?.setLanguage(langMap[inputVal] || inputVal)
-        } else if (!val || val === 'plaintext') {
-          await _editor?.setLanguage('plaintext')
+        if (!val || val === 'plaintext' || val === 'text' || val === 'plain') {
+          await applyEditorLanguage('plaintext')
+          return
+        }
+        // Load CodeMirror grammar as soon as the input matches a known language / alias
+        if (isLanguageSupported(val)) {
+          await applyEditorLanguage(val)
         }
       }, 300)
     })

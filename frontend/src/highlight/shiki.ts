@@ -152,6 +152,7 @@ const LANGUAGE_ALIASES: Record<string, string> = {
   bash: 'bash',
   zsh: 'bash',
   shell: 'bash',
+  shellscript: 'bash',
   dockerfile: 'docker',
   docker: 'docker',
   py: 'python',
@@ -167,6 +168,11 @@ const LANGUAGE_ALIASES: Record<string, string> = {
   objectivec: 'objective-c',
   objectivecpp: 'objective-cpp',
   'objective-c++': 'objective-cpp',
+  // CodeMirror canonical IDs → Shiki
+  webassembly: 'wasm',
+  'c-sharp': 'csharp',
+  fsharp: 'fsharp',
+  'f-sharp': 'fsharp',
 }
 
 let _validLanguageSet: Set<string> | null = null

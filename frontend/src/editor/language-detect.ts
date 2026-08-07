@@ -4,36 +4,44 @@
  */
 
 import {
-  getLanguageMap as getShikiLanguageMap,
+  getLanguageMap as getCodeMirrorLanguageMap,
   getValidLanguageSet,
   isLanguageSupported,
   normalizeLanguageId,
   populateLanguageDatalist,
-} from '../highlight/shiki.js'
+} from '../highlight/codemirror.js'
 
-// Flourite to shiki language mapping
-export const FLOURITE_TO_SHIKI: Record<string, string> = {
+/**
+ * Flourite (shiki-mode) language names → CodeMirror canonical IDs.
+ * Anything not listed is passed through normalizeLanguageId().
+ */
+export const FLOURITE_TO_CM: Record<string, string> = {
   html: 'html',
-  dockerfile: 'docker',
+  dockerfile: 'dockerfile',
+  docker: 'dockerfile',
   csharp: 'csharp',
   javascript: 'javascript',
   typescript: 'typescript',
   markdown: 'markdown',
-  bash: 'bash',
-  shell: 'bash',
+  bash: 'shell',
+  shell: 'shell',
+  shellscript: 'shell',
 }
+
+/** @deprecated use FLOURITE_TO_CM */
+export const FLOURITE_TO_SHIKI = FLOURITE_TO_CM
 
 export const validLanguages: Set<string> = getValidLanguageSet()
 
 /**
- * Initialize language list from bundled CodeMirror language data.
+ * Initialize language list from CodeMirror language data.
  */
 export async function loadCodeMirrorLanguages(dataList: HTMLElement | null = null): Promise<void> {
   populateLanguageDatalist(dataList)
 }
 
 /**
- * Validate and normalize a language string
+ * Validate and normalize a language string against CodeMirror languages
  */
 export function validateLanguage(lang: string | null | undefined): string {
   if (!lang || typeof lang !== 'string') {
@@ -48,7 +56,7 @@ export function validateLanguage(lang: string | null | undefined): string {
 let _flouriteModule: Record<string, any> | null = null
 
 /**
- * Detect language from code using Flourite
+ * Detect language from code using Flourite, returning a CodeMirror language id.
  */
 export async function detectLanguage(code: string): Promise<string | null> {
   if (!code || !_flouriteModule) return null
@@ -59,7 +67,8 @@ export async function detectLanguage(code: string): Promise<string | null> {
     const result = flourite(code, { shiki: true, noUnknown: true })
     if (result && result.language && result.language !== 'Unknown') {
       const id: string = result.language.toLowerCase()
-      const mapped = normalizeLanguageId(FLOURITE_TO_SHIKI[id] || id)
+      const mapped = normalizeLanguageId(FLOURITE_TO_CM[id] || id)
+      if (!isLanguageSupported(mapped)) return null
       console.log(`Flourite detected: ${result.language} -> ${mapped}`)
       return mapped
     }
@@ -83,7 +92,7 @@ export async function loadFlourite(): Promise<void> {
 }
 
 export function getLanguageMap(): Record<string, string> {
-  return getShikiLanguageMap()
+  return getCodeMirrorLanguageMap()
 }
 
 /**
@@ -92,3 +101,5 @@ export function getLanguageMap(): Record<string, string> {
 export function getValidLanguages(): Set<string> {
   return getValidLanguageSet()
 }
+
+export { normalizeLanguageId, isLanguageSupported, getValidLanguageSet }

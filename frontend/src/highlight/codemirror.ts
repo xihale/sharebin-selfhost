@@ -7,7 +7,7 @@ import { highlightTree, tags } from '@lezer/highlight'
 
 /** Wrap a legacy StreamParser as a LanguageSupport extension */
 function legacy(parser: { startState: (...args: unknown[]) => unknown; token: (...args: unknown[]) => string | null }): LanguageSupport {
-  return StreamLanguage.define(parser as never) as unknown as LanguageSupport
+  return new LanguageSupport(StreamLanguage.define(parser as never))
 }
 
 const CDN_LEGACY = 'https://npm.webcache.cn/@codemirror/legacy-modes@6.5.2/mode/'
@@ -179,15 +179,16 @@ const LANGUAGE_ALIASES = new Map<string, string>(Object.entries({
   markup: 'html',
   htm: 'html',
   js: 'javascript',
-  jsx: 'javascript',
   mjs: 'javascript',
   cjs: 'javascript',
+  // jsx/tsx are distinct CodeMirror languages — do not collapse into js/ts
   ts: 'typescript',
-  tsx: 'typescript',
   sh: 'shell',
   bash: 'shell',
   zsh: 'shell',
   shell: 'shell',
+  shellscript: 'shell',
+  shellsession: 'shell',
   dockerfile: 'dockerfile',
   docker: 'dockerfile',
   py: 'python',
@@ -200,6 +201,11 @@ const LANGUAGE_ALIASES = new Map<string, string>(Object.entries({
   md: 'markdown',
   yml: 'yaml',
   jsonc: 'json',
+  // Common Shiki / Flourite IDs → CodeMirror canonical IDs
+  wasm: 'webassembly',
+  'objective-cpp': 'objective-cpp',
+  objectivec: 'objective-c',
+  objectivecpp: 'objective-cpp',
 }))
 
 export const xaiHighlightStyle = HighlightStyle.define([
@@ -266,7 +272,11 @@ const baseEditorTheme = EditorView.theme({
 
 let _languageMap: Map<string, string> | null = null
 let _validLanguages: Set<string> | null = null
-const _loadedLanguageExtensions = new Map<string, Extension[]>()
+let _canonicalLanguageIds: string[] | null = null
+/** Successfully loaded language extensions (LanguageSupport / Language / []). */
+const _loadedLanguageExtensions = new Map<string, Extension>()
+/** In-flight loads so concurrent setLanguage() calls share one import. */
+const _loadingLanguageExtensions = new Map<string, Promise<Extension>>()
 
 function normalizeRawLanguage(language: string | null | undefined): string {
   return String(language || 'plaintext').trim().toLowerCase()
@@ -287,37 +297,48 @@ function descriptionId(description: LanguageDescription): string {
 }
 
 function ensureLanguageIndex(): void {
-  if (_languageMap && _validLanguages) return
+  if (_languageMap && _validLanguages && _canonicalLanguageIds) return
 
   _languageMap = new Map([['plaintext', 'plaintext']])
   _validLanguages = new Set(['plaintext'])
+  const canonical = new Set<string>(['plaintext'])
 
   for (const description of languages) {
     const id = descriptionId(description)
+    // description.alias already includes the lowercased name (LanguageDescription.of)
     const names = [description.name, ...(description.alias || [])]
 
+    canonical.add(id)
     _validLanguages.add(id)
     _languageMap.set(id, id)
 
     for (const name of names) {
       const raw = normalizeRawLanguage(name)
       const cssId = toCssLanguageId(raw)
+      _validLanguages.add(raw)
       _validLanguages.add(cssId)
       _languageMap.set(raw, id)
       _languageMap.set(cssId, id)
     }
   }
 
+  // Aliases only fill gaps — never overwrite a real language id (e.g. jsx, tsx)
   for (const [alias, target] of LANGUAGE_ALIASES) {
     _validLanguages.add(alias)
-    _languageMap.set(alias, target)
+    if (!_languageMap.has(alias)) {
+      _languageMap.set(alias, target)
+    }
   }
+
+  _canonicalLanguageIds = [...canonical].sort((a, b) => a.localeCompare(b))
 }
 
 export function normalizeLanguageId(language: string | null | undefined): string {
   ensureLanguageIndex()
   const raw = normalizeRawLanguage(language)
-  const mapped = _languageMap!.get(raw) || LANGUAGE_ALIASES.get(raw) || raw
+  let mapped = _languageMap!.get(raw) || LANGUAGE_ALIASES.get(raw) || raw
+  // One extra hop for alias → alias → canonical (e.g. shellscript → shell)
+  mapped = _languageMap!.get(mapped) || LANGUAGE_ALIASES.get(mapped) || mapped
   return toCssLanguageId(mapped)
 }
 
@@ -335,9 +356,10 @@ export function getValidLanguageSet(): Set<string> {
   return new Set(_validLanguages!)
 }
 
+/** Canonical language IDs for the language picker (not every alias). */
 export function getAvailableLanguageIds(): string[] {
   ensureLanguageIndex()
-  return [..._validLanguages!].sort((a, b) => a.localeCompare(b))
+  return _canonicalLanguageIds!.slice()
 }
 
 export function populateLanguageDatalist(dataList: HTMLElement | null): void {
@@ -358,21 +380,33 @@ export function isLanguageSupported(language: string): boolean {
 }
 
 function findLanguageDescription(language: string): LanguageDescription | null {
+  ensureLanguageIndex()
   const raw = normalizeRawLanguage(language)
   const normalized = normalizeLanguageId(raw)
+
+  // Match by our canonical CSS id first (handles multi-word names like "MariaDB SQL" → mariadb-sql)
+  for (const description of languages) {
+    if (descriptionId(description) === normalized) return description
+  }
+
   const searchNames = [
-    LANGUAGE_ALIASES.get(raw),
-    LANGUAGE_ALIASES.get(normalized),
     raw,
     normalized,
+    LANGUAGE_ALIASES.get(raw),
+    LANGUAGE_ALIASES.get(normalized),
+    _languageMap?.get(raw),
+    _languageMap?.get(normalized),
   ].filter(Boolean) as string[]
 
+  // Prefer exact name/alias matches before fuzzy (avoids "c" matching "Clojure", etc.)
   for (const name of searchNames) {
     const exact = LanguageDescription.matchLanguageName(languages, name, false)
     if (exact) return exact
   }
 
   for (const name of searchNames) {
+    // Skip very short fuzzy queries — too many false positives
+    if (name.length < 2) continue
     const fuzzy = LanguageDescription.matchLanguageName(languages, name, true)
     if (fuzzy) return fuzzy
   }
@@ -380,28 +414,46 @@ function findLanguageDescription(language: string): LanguageDescription | null {
   return null
 }
 
-export async function getLanguageExtension(language: string): Promise<Extension[]> {
+/**
+ * Load (and cache) the CodeMirror language extension for a language id.
+ * Returns LanguageSupport / Language / [] suitable for Compartment.reconfigure().
+ */
+export async function getLanguageExtension(language: string): Promise<Extension> {
   const id = normalizeLanguageId(language)
   if (id === 'plaintext') return []
-  if (_loadedLanguageExtensions.has(id)) return _loadedLanguageExtensions.get(id)!
 
-  const description = findLanguageDescription(id)
-  if (!description) {
-    _loadedLanguageExtensions.set(id, [])
-    return []
-  }
+  const cached = _loadedLanguageExtensions.get(id)
+  if (cached !== undefined) return cached
 
-  try {
-    const support = await description.load()
-    const extension = (support?.extension ?? support ?? []) as Extension | Extension[]
-    const extensions = Array.isArray(extension) ? extension : [extension]
-    _loadedLanguageExtensions.set(id, extensions)
-    return extensions
-  } catch (error) {
-    console.warn(`Failed to load CodeMirror language "${id}"`, error)
-    _loadedLanguageExtensions.set(id, [])
-    return []
-  }
+  const inflight = _loadingLanguageExtensions.get(id)
+  if (inflight) return inflight
+
+  const loadPromise = (async (): Promise<Extension> => {
+    const description = findLanguageDescription(id)
+    if (!description) {
+      // Do not cache misses forever — caller may use a better id later;
+      // only cache successful loads and explicit plaintext.
+      return []
+    }
+
+    try {
+      // LanguageDescription.load() → LanguageSupport (modern) or Language (legacy StreamLanguage)
+      const support = await description.load()
+      // Pass the support object itself so CodeMirror flattens `.extension` correctly
+      const extension: Extension = (support ?? []) as Extension
+      _loadedLanguageExtensions.set(id, extension)
+      return extension
+    } catch (error) {
+      console.warn(`Failed to load CodeMirror language "${id}"`, error)
+      // Do not cache failures — allow retry on next switch
+      return []
+    } finally {
+      _loadingLanguageExtensions.delete(id)
+    }
+  })()
+
+  _loadingLanguageExtensions.set(id, loadPromise)
+  return loadPromise
 }
 
 interface EditorOptions {
@@ -420,6 +472,8 @@ export async function createCodeEditor(parent: HTMLElement, options: EditorOptio
   const languageExtension = await getLanguageExtension(options.language || 'plaintext')
   const onChange = options.onChange
   const onSave = options.onSave
+  /** Monotonic token so rapid language switches only apply the latest load. */
+  let languageRequestId = 0
 
   const view = new EditorView({
     parent,
@@ -469,7 +523,10 @@ export async function createCodeEditor(parent: HTMLElement, options: EditorOptio
       view.focus()
     },
     async setLanguage(language: string) {
+      const requestId = ++languageRequestId
       const extension = await getLanguageExtension(language)
+      // Ignore stale results if the user switched language again while loading
+      if (requestId !== languageRequestId) return
       view.dispatch({ effects: languageCompartment.reconfigure(extension) })
     },
     destroy() {
@@ -538,7 +595,12 @@ export async function getHighlightedLines(content: string, language = 'plaintext
   const languageExtension = await getLanguageExtension(normalizedLanguage)
   const ranges: HighlightRange[] = []
 
-  if (languageExtension && (!Array.isArray(languageExtension) || languageExtension.length > 0)) {
+  // Empty array means plaintext / unsupported; LanguageSupport is a non-array object
+  const hasLanguage = Array.isArray(languageExtension)
+    ? languageExtension.length > 0
+    : languageExtension != null
+
+  if (hasLanguage) {
     const state = EditorState.create({
       doc: source,
       extensions: [languageExtension],
