@@ -5,36 +5,6 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-// Mermaid diagram renderer
-interface MermaidAPI {
-  initialize: (options: Record<string, any>) => void
-  run: (options: { nodes: NodeListOf<Element> }) => Promise<void>
-}
-
-// marked markdown parser
-declare const marked: {
-  Renderer: new () => {
-    code: (code: string, lang?: string) => string
-    [key: string]: any
-  }
-  parse: (src: string, options?: Record<string, any>) => string
-}
-
-// DOMPurify sanitizer
-declare const DOMPurify: {
-  sanitize: (html: string) => string
-}
-
-// KaTeX auto-render
-declare const renderMathInElement: (
-  element: HTMLElement,
-  options: {
-    delimiters: Array<{ left: string; right: string; display: boolean }>
-    throwOnError: boolean
-    trust: boolean
-  },
-) => void
-
 // html2canvas
 declare const html2canvas: (
   element: HTMLElement,

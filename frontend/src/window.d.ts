@@ -8,7 +8,6 @@ declare global {
   interface Window {
     icon: typeof import('./icons').icon
     ICONS: typeof import('./icons').ICONS
-    mermaid: MermaidAPI
   }
 }
 

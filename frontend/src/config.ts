@@ -8,13 +8,6 @@ const CDN_BASE = 'https://npm.webcache.cn'
 
 export const CDN: Record<string, string | { js: string; css: string }> = {
   base: CDN_BASE,
-  marked: `${CDN_BASE}/marked@12.0.0/marked.min.js`,
-  dompurify: `${CDN_BASE}/dompurify@3.0.6/dist/purify.min.js`,
-  katex: {
-    js: `${CDN_BASE}/katex@0.16.9/dist/katex.min.js`,
-    css: `${CDN_BASE}/katex@0.16.9/dist/katex.min.css`,
-  },
-  mermaid: `${CDN_BASE}/mermaid@10.9.1/dist/mermaid.esm.min.mjs`,
   html2canvas: `${CDN_BASE}/html2canvas@1.4.1/dist/html2canvas.min.js`,
   flourite: `${CDN_BASE}/flourite@1.5.0/dist/flourite.min.js`,
 }
@@ -66,37 +59,6 @@ export async function initConfig(): Promise<AppConfig> {
  */
 export function getConfig(): AppConfig | null {
   return _config
-}
-
-/**
- * Library loading cache
- * Each library is loaded only once
- */
-const _loadedLibs = new Map<string, Promise<unknown>>()
-
-/**
- * Load a library dynamically
- */
-export function loadLibrary(name: string): Promise<unknown> {
-  if (_loadedLibs.has(name)) {
-    return _loadedLibs.get(name)!
-  }
-
-  const url = CDN[name]
-  if (!url) {
-    return Promise.reject(new Error(`Unknown library: ${name}`))
-  }
-
-  const promise = new Promise((resolve, reject) => {
-    const script = document.createElement('script')
-    script.src = url as string
-    script.onload = () => resolve((window as unknown as Record<string, unknown>)[name] || true)
-    script.onerror = () => reject(new Error(`Failed to load ${name} from ${url}`))
-    document.head.appendChild(script)
-  })
-
-  _loadedLibs.set(name, promise)
-  return promise
 }
 
 // ==================== Constants ====================

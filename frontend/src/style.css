@@ -604,6 +604,30 @@ main {
   }
 }
 
+/* Mermaid diagrams — Pele renders SVG themed via --pele-* variables.
+   Mapping them to the app theme means light/dark switches need no re-render. */
+.markdown-body .mermaid {
+  --pele-bg: var(--bg);
+  --pele-fg: var(--fg);
+  --pele-muted: var(--text-tertiary);
+  --pele-line: var(--fg);
+  --pele-surface: var(--surface);
+  --pele-surface-alt: var(--surface);
+  --pele-border: var(--border-strong);
+  --pele-accent: #3b82f6;
+  --pele-font: var(--font-body);
+  --pele-font-mono: var(--font-mono);
+
+  display: block;
+  position: relative;
+  margin: 0 0 var(--space-3) 0;
+}
+
+.markdown-body .mermaid svg.pele {
+  max-width: 100%;
+  height: auto;
+}
+
 /* Markdown Body States */
 .markdown-body.state-hidden {
   display: none !important;
