@@ -1,7 +1,13 @@
 import { defineConfig, type Plugin, type ViteDevServer } from 'vite'
 import { resolve } from 'path'
 import { readFileSync } from 'fs'
-import { getHtmlEntrypointForPath, HTML_ENTRYPOINTS } from './src/shared/routes'
+import type { ServerResponse } from 'http'
+import { getHtmlEntrypointForPath, getPasteIdForPath, HTML_ENTRYPOINTS } from './src/shared/routes'
+import {
+  buildRedirectLocation,
+  redirectCacheControl,
+  SHARE_LINK_REDIRECT_STATUS,
+} from './src/shared/redirect'
 
 // Packages loaded from webcache CDN via import map
 const CDN_EXTERNAL = [
@@ -87,25 +93,66 @@ function getFallbackTarget(url: string): { html: string; status: number } | null
   return { html: HTML_ENTRYPOINTS.notFound, status: 404 }
 }
 
+/**
+ * Dev/preview parity with the Bun server: ask the API whether `/:id` is a URL
+ * paste and answer with the same 308 instead of loading the viewer SPA.
+ * Returns false (→ fall through to the SPA) when the API says code/404/down.
+ */
+async function redirectPasteLink(
+  pasteId: string,
+  search: string,
+  res: ServerResponse,
+): Promise<boolean> {
+  try {
+    const response = await fetch(`${apiTarget}/api/paste/${encodeURIComponent(pasteId)}`, {
+      signal: AbortSignal.timeout(2000),
+    })
+    if (!response.ok) return false
+
+    const data = (await response.json()) as { type?: string; url?: string; expiresIn?: number }
+    if (data.type !== 'url' || !data.url) return false
+
+    res.statusCode = SHARE_LINK_REDIRECT_STATUS
+    res.setHeader('Location', buildRedirectLocation(data.url, search))
+    res.setHeader('Cache-Control', redirectCacheControl((data.expiresIn ?? 0) * 1000))
+    res.end()
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Split a raw request target into pathname + query string. */
+function splitRequestTarget(rawUrl: string): { pathname: string; search: string } {
+  const queryIndex = rawUrl.indexOf('?')
+  if (queryIndex === -1) return { pathname: rawUrl, search: '' }
+  return { pathname: rawUrl.slice(0, queryIndex), search: rawUrl.slice(queryIndex) }
+}
+
 function spaFallback(): Plugin {
   return {
     name: 'spa-fallback',
     configureServer(server: ViteDevServer) {
       // Pre-hook: runs BEFORE Vite's built-in middleware stack
       server.middlewares.use(async (req, res, next) => {
-        const url = req.url?.split('?')[0] || '/'
+        const { pathname, search } = splitRequestTarget(req.url || '/')
 
         // Skip API calls, Vite internals, and anything with a file extension
         if (
-          url.startsWith('/api/') ||
-          url.startsWith('/@') ||
-          url.startsWith('/node_modules/') ||
-          /\.\w+$/.test(url)
+          pathname.startsWith('/api/') ||
+          pathname.startsWith('/@') ||
+          pathname.startsWith('/node_modules/') ||
+          /\.\w+$/.test(pathname)
         ) {
           return next()
         }
 
-        const target = getFallbackTarget(url)
+        const pasteId = getPasteIdForPath(pathname)
+        if (pasteId && (req.method === 'GET' || req.method === 'HEAD')) {
+          if (await redirectPasteLink(pasteId, search, res)) return
+        }
+
+        const target = getFallbackTarget(pathname)
         if (!target) return next()
 
         try {
@@ -124,12 +171,17 @@ function spaFallback(): Plugin {
     },
     configurePreviewServer(server) {
       server.middlewares.use(async (req, res, next) => {
-        const url = req.url?.split('?')[0] || '/'
-        if (url.startsWith('/api/') || url.startsWith('/@') || url.includes('.')) {
+        const { pathname, search } = splitRequestTarget(req.url || '/')
+        if (pathname.startsWith('/api/') || pathname.startsWith('/@') || pathname.includes('.')) {
           return next()
         }
 
-        const target = getFallbackTarget(url)
+        const pasteId = getPasteIdForPath(pathname)
+        if (pasteId && (req.method === 'GET' || req.method === 'HEAD')) {
+          if (await redirectPasteLink(pasteId, search, res)) return
+        }
+
+        const target = getFallbackTarget(pathname)
         if (!target) return next()
 
         try {

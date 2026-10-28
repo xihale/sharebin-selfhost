@@ -67,9 +67,10 @@ export async function initViewer(pasteId: string, _config: AppConfig): Promise<v
 
     const data: PasteResponse = await res.json()
 
-    // Handle URL redirect
-    if (data.type === 'url') {
-      window.location.href = data.url!
+    // Fallback only: the Bun server and Vite dev server answer URL pastes with
+    // a 308 before this viewer loads. Static-only hosting still needs this path.
+    if (data.type === 'url' && data.url) {
+      window.location.replace(data.url)
       return
     }
 

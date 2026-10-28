@@ -5,6 +5,7 @@ A simple, secure, and blazing fast Pastebin built with **Bun**, **Hono**, **Post
 ## ✨ Features
 
 - **Blazing Fast**: Runs on a self-hosted Bun server.
+- **Server-side 308 redirects**: URL pastes answer `GET /:id` with a permanent 308 (HEAD supported), forwarding query parameters and caching only until the paste expires.
 - **Dynamic ID**: Automatically scales ID length from 2 to 10 characters based on collision.
 - **Signed Cookie grace period**: verify once, share freely for 1 hour.
 - **Self-hosted Assets**: No external CDN dependencies (FontAwesome, CodeMirror, PrismJS are all local).

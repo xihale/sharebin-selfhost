@@ -37,6 +37,7 @@ interface PasteResponse {
   language: string
   type: 'code' | 'url'
   url?: string
+  expiresIn?: number
   expiration: string
 }
 

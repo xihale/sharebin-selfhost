@@ -8,7 +8,7 @@ import { generateId, validateId } from '../utils/id'
 import { validateLanguage } from '../utils/language'
 import * as pg from '../db/pg'
 import { getCachedPaste, cachePaste, invalidatePasteCache } from '../db/redis'
-import type { PasteResponse } from '../types'
+import type { PasteResponse, PasteRow } from '../types'
 import { Errors } from '../utils/error'
 
 /**
@@ -56,12 +56,29 @@ export async function createPaste(
   return finalId
 }
 
+/** Remaining lifetime in milliseconds (caller guarantees the paste is not expired). */
+function remainingMs(row: PasteRow): number {
+  return row.created_at + PASTE.EXPIRATION_TTL - Date.now()
+}
+
+/** Validate the stored link protocol before it is handed to a client or a Location header. */
+function parsePasteUrl(content: string): string {
+  try {
+    const url = new URL(content)
+    if (PASTE.ALLOWED_URL_PROTOCOLS.some((protocol) => protocol === url.protocol)) {
+      return content
+    }
+  } catch {
+    // invalid URL format
+  }
+  throw Errors.invalidUrl()
+}
+
 /**
- * Retrieve a paste by ID
- * Redis read cache → PG fallback → cache backfill
- * Lazy deletion on expiry
+ * Load a paste by ID.
+ * Redis read cache → PG fallback → cache backfill; lazy deletion on expiry.
  */
-export async function getPaste(id: string): Promise<PasteResponse> {
+async function loadPasteRow(id: string): Promise<PasteRow> {
   if (!validateId(id)) throw Errors.notFound()
 
   // 1. Try cache
@@ -83,18 +100,20 @@ export async function getPaste(id: string): Promise<PasteResponse> {
     throw Errors.linkExpired()
   }
 
+  return data
+}
+
+/** Retrieve a paste by ID. */
+export async function getPaste(id: string): Promise<PasteResponse> {
+  const data = await loadPasteRow(id)
+
   // URL type
   if (data.type === 'url') {
-    const allowedProtocols = PASTE.ALLOWED_URL_PROTOCOLS
-    try {
-      const url = new URL(data.content)
-      if (allowedProtocols.includes(url.protocol as (typeof allowedProtocols)[number])) {
-        return { type: 'url', url: data.content }
-      }
-    } catch {
-      // invalid URL format
+    return {
+      type: 'url',
+      url: parsePasteUrl(data.content),
+      expiresIn: Math.ceil(remainingMs(data) / 1000),
     }
-    throw Errors.invalidUrl()
   }
 
   // Code type
@@ -104,6 +123,17 @@ export async function getPaste(id: string): Promise<PasteResponse> {
     language: data.language || 'plaintext',
     expiration: formatExpiration(data.created_at, PASTE.EXPIRATION_TTL),
   }
+}
+
+/**
+ * Resolve a share link for server-side redirects.
+ * Returns null for code pastes; throws for missing/expired/invalid links.
+ */
+export async function getPasteLink(id: string): Promise<{ url: string; remainingMs: number } | null> {
+  const data = await loadPasteRow(id)
+  if (data.type !== 'url') return null
+
+  return { url: parsePasteUrl(data.content), remainingMs: remainingMs(data) }
 }
 
 /** Format remaining lifetime as "7 d 3 h" */

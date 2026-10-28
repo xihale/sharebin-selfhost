@@ -17,7 +17,13 @@ import { getPasteRoute } from './routes/paste'
 import { getConfigRoute } from './routes/config'
 import { globalErrorHandler } from './utils/error'
 import { startCleanupCron } from './cron'
-import { getHtmlEntrypointForPath, HTML_ENTRYPOINTS } from './shared/routes'
+import { getPasteLink } from './services/paste.service'
+import { getHtmlEntrypointForPath, getPasteIdForPath, HTML_ENTRYPOINTS } from './shared/routes'
+import {
+  buildRedirectLocation,
+  redirectCacheControl,
+  SHARE_LINK_REDIRECT_STATUS,
+} from './shared/redirect'
 import { readFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -48,6 +54,25 @@ app.use('*', async (c, next) => {
 
   // Let serveStatic handle real files (anything with an extension)
   if (/\.[a-zA-Z0-9]+$/.test(pathname)) return next()
+
+  // Share links: URL pastes answer with a permanent 308 before any HTML is sent.
+  // Hono routes HEAD through GET handlers but keeps the original method on the
+  // request, so both must be accepted here.
+  const pasteId = getPasteIdForPath(pathname)
+  if (pasteId && (c.req.method === 'GET' || c.req.method === 'HEAD')) {
+    try {
+      const link = await getPasteLink(pasteId)
+      if (link) {
+        c.header('Cache-Control', redirectCacheControl(link.remainingMs))
+        return c.redirect(
+          buildRedirectLocation(link.url, url.search),
+          SHARE_LINK_REDIRECT_STATUS,
+        )
+      }
+    } catch {
+      // Missing/expired/invalid link: fall through so the viewer renders the error state.
+    }
+  }
 
   const entry = getHtmlEntrypointForPath(pathname)
   if (entry) {

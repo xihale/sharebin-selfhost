@@ -34,6 +34,8 @@ export type PasteResponse = {
   type: 'code' | 'url'
   content?: string
   url?: string
+  /** URL pastes: seconds until the link expires (bounds redirect caching). */
+  expiresIn?: number
   language?: string
   expiration?: string
 }
